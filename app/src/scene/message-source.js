@@ -234,6 +234,62 @@ export function buildBridgeImageSource(raw, filter) {
     return source.trim();
 }
 
+const BUILTIN_CLEAN_PATTERNS = new Set(DEFAULT_VIRTUAL_REGEX_RULES.map((rule) => rule.pattern));
+
+function virtualRegexRuleList(rule) {
+    const cfg = normalizeVirtualRegex(rule);
+    if (!cfg.enabled) return [];
+    return [{ pattern: cfg.pattern, flags: cfg.flags, replacement: cfg.replacement }, ...cfg.rules]
+        .filter((item) => item.pattern);
+}
+
+function isDeletionRule(rule) {
+    return String(rule && rule.replacement || '') === '';
+}
+
+function applyRegexRuleList(text, rules) {
+    return rules.reduce((current, rule) => {
+        try {
+            return String(current || '').replace(new RegExp(rule.pattern, rule.flags), rule.replacement);
+        } catch (error) {
+            return current;
+        }
+    }, String(text || ''));
+}
+
+// 图片保留标签同时出现在正文排除里：正文不显示，但配图扫描还要读到。
+// 先删其余排除块，包在思维链里的图片会一起去掉。
+function narrativeExcludeTags(sourceFilter) {
+    const imageTags = new Set(parseTagList(sourceFilter.imageIncludeTags).map((tag) => tag.toLowerCase()));
+    return parseTagList(sourceFilter.textExcludeTags)
+        .filter((tag) => !imageTags.has(tag.toLowerCase()))
+        .join('\n');
+}
+
+// 语法扫描之前的清洗：去掉排除块，并执行「替换为空」的正文规则。
+// 会改写 [igs-char:] 的格式化规则仍留在指令提取之后，避免先把语法拆掉。
+export function cleanReaderSource(raw, sourceFilter, virtualRegex) {
+    const cfg = normalizeSourceFilter(sourceFilter);
+    let source = String(raw || '');
+    if (cfg.enabled) {
+        if (cfg.stripHtmlComments) source = stripHtmlComments(source);
+        source = removeTagBlocks(source, narrativeExcludeTags(cfg));
+    }
+    const deletions = virtualRegexRuleList(virtualRegex).filter(isDeletionRule);
+    return deletions.length ? applyRegexRuleList(source, deletions) : source;
+}
+
+// 原文里有排除块，或用户自己的「替换为空」规则改动了原文。内置 HTML 注释规则不算。
+export function readerSourceExcluded(raw, sourceFilter, virtualRegex) {
+    const cfg = normalizeSourceFilter(sourceFilter);
+    const original = String(raw || '');
+    if (cfg.enabled && hasTagBlocks(original, cfg.textExcludeTags)) return true;
+    const userDeletions = virtualRegexRuleList(virtualRegex)
+        .filter((rule) => isDeletionRule(rule) && !BUILTIN_CLEAN_PATTERNS.has(rule.pattern));
+    if (!userDeletions.length) return false;
+    return applyRegexRuleList(original, userDeletions) !== original;
+}
+
 export function applyImmersiveGalgameSystemBodyFormat(raw, rule, outfitResolver = null) {
     const source = String(raw || '');
     const cfg = normalizeVirtualRegex(rule);
@@ -445,16 +501,18 @@ export function readerBodyText(raw, sourceFilter) {
 export function buildIgsTextPayload(message, options = {}) {
     const originalRaw = getMessagePrimaryText(message);
     const sourceFilter = normalizeSourceFilter(options.sourceFilter);
-    const markerLayoutSource = normalizeImageMarkerLayout(originalRaw);
+    const virtualRegex = normalizeVirtualRegex(options.virtualRegex);
+    // 聊天块、HTML 卡片和场景指令都只看清洗后的正文，排除块里的语法不再提前生效。
+    const syntaxSource = cleanReaderSource(originalRaw, sourceFilter, virtualRegex);
+    const markerLayoutSource = normalizeImageMarkerLayout(syntaxSource);
     const htmlCardResult = extractHtmlCards(markerLayoutSource, parseTagList(sourceFilter.htmlCardTags));
     const chatResult = extractChatBlocks(htmlCardResult.text);
     // 指令写走样、或和旁白挤在同一行时先理顺：分页、正文格式化和指令归属都从这份文本出发，三者才对得上。
     const raw = normalizeIgsDirectiveLayout(chatResult.text);
     const htmlCards = htmlCardResult.cards;
     const chats = chatResult.chats;
-    const virtualRegex = normalizeVirtualRegex(options.virtualRegex);
-    const visibleText = normalizeIgsDirectiveLayout(resolveVisibleText(message, options.visibleText));
-    const hasExcludedBlocks = sourceFilter.enabled && hasTagBlocks(raw, sourceFilter.textExcludeTags);
+    const visibleText = normalizeIgsDirectiveLayout(cleanReaderSource(resolveVisibleText(message, options.visibleText), sourceFilter, virtualRegex));
+    const hasExcludedBlocks = readerSourceExcluded(originalRaw, sourceFilter, virtualRegex);
     // Once DOM has flattened a removed block into plain text, its boundaries cannot be recovered.
     const safeVisibleText = hasExcludedBlocks ? '' : (sourceFilter.enabled
         ? normalizeWhitespace(removeTagBlocks(visibleText, sourceFilter.textExcludeTags)) : visibleText);

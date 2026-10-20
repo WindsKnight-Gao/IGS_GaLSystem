@@ -945,6 +945,49 @@ test('gate:scene:igs-message-source:excluded-content-cannot-return-via-dom-or-un
     }
 });
 
+test('gate:scene:igs-message-source:cleans-excluded-blocks-before-syntax-scan', () => {
+    const raw = [
+        '<think_fox~>',
+        '<htm1fenge><b>秘密卡</b></htm1fenge>',
+        '[igs-chat:密聊]',
+        '[igs-msg:甲|别看]',
+        '[igs-chat-end]',
+        '[igs-scene:密室|夜|雨]',
+        '[igs-char:甲|冷|秘密]',
+        '</think_fox~>',
+        '<content>[igs-char:乙|笑|你好]</content>',
+    ].join('\n');
+    const options = {
+        sourceFilter: { ...DEFAULT_SOURCE_FILTER, textExcludeTags: `${DEFAULT_SOURCE_FILTER.textExcludeTags}\nthink_fox~` },
+        sceneAssets: { enabled: true },
+        visibleText: '秘密卡 别看 秘密 你好',
+    };
+    const byTag = buildIgsTextPayload({ text: raw }, options);
+    const byRegex = buildIgsTextPayload({ text: raw }, {
+        sourceFilter: DEFAULT_SOURCE_FILTER,
+        sceneAssets: { enabled: true },
+        visibleText: options.visibleText,
+        virtualRegex: {
+            ...DEFAULT_VIRTUAL_REGEX,
+            rules: [
+                ...DEFAULT_VIRTUAL_REGEX.rules,
+                { pattern: '\\s*<think_fox~[^>]*>[\\s\\S]*?</think_fox~\\s*>\\s*', flags: 'gi', replacement: '' },
+            ],
+        },
+    });
+
+    for (const payload of [byTag, byRegex]) {
+        assert.equal(payload.formattedText.includes('秘密'), false);
+        assert.equal(payload.formattedText.includes('别看'), false);
+        assert.equal(payload.formattedText.includes('密室'), false);
+        assert.match(payload.formattedText, /你好/);
+        assert.equal(payload.htmlCards.length, 0);
+        assert.equal(payload.chats.length, 0);
+        assert.equal(payload.usedDomOverride, false);
+        assert.deepEqual(payload.sceneDirectives.map((item) => item.character || item.scene), ['乙']);
+    }
+});
+
 test('gate:igs-ui:excluded-yuan-with-invisible-boundaries-does-not-add-pages', () => {
     const raw = '\u2063\u2062\u2063[igs-scene:李家主宅卧室|早晨|晴]醒来。\n\u2063\u2064\u2063\u2060\n'
         + '<yuan>\u2063\u200c[igs-thought:哪吒|怪訝|*日本語*]日本語。</yuan>\n'

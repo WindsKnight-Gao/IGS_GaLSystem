@@ -6,7 +6,7 @@ import { findLastDreadLevel } from '../scene/horror.js';
 import { resolveWorldview } from '../scene/worldview.js';
 import { sceneAssetsForContext } from '../scene/asset-scope.js';
 import { getSillyTavernContext } from '../host/tavern-helper-adapter.js';
-import { buildIgsTextPayload, getMessagePrimaryText } from '../scene/message-source.js';
+import { buildIgsTextPayload, cleanReaderSource, getMessagePrimaryText } from '../scene/message-source.js';
 import { extractSceneDirectives, resolveLatestSceneDirective } from '../scene/scene-directives.js';
 import { BATTLE_CHAIN_MAX_FLOORS, createBattleHistoryScanner } from '../scene/battle-context.js';
 import { collectPromises } from '../scene/promise-reminder.js';
@@ -212,7 +212,11 @@ function cloneData(value) {
 // 楼层中标签之前的段落没有本楼场景可归属，由消费点回退到这里的继承场景。
 const INHERITED_SCENE_MAX_FLOORS = 3;
 
-async function resolveInheritedSceneState(app, visualNovelText, messageId) {
+function messageSyntaxText(message, bridge) {
+    return cleanReaderSource(getMessagePrimaryText(message), bridge && bridge.sourceFilter, bridge && bridge.virtualRegex);
+}
+
+async function resolveInheritedSceneState(app, visualNovelText, messageId, bridge) {
     if (!app || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return null;
     const normalizedId = Number(messageId);
     if (!Number.isFinite(normalizedId) || normalizedId < 0) return null;
@@ -228,7 +232,7 @@ async function resolveInheritedSceneState(app, visualNovelText, messageId) {
         if (!previous || previous.id == null || Number(previous.id) === cursor) return null;
         cursor = Number(previous.id);
         const inherited = resolveLatestSceneDirective(
-            extractSceneDirectives(getMessagePrimaryText(previous)).directives,
+            extractSceneDirectives(messageSyntaxText(previous, bridge)).directives,
         );
         if (inherited) return { ...inherited, inheritedFromMessageId: cursor };
     }
@@ -236,7 +240,7 @@ async function resolveInheritedSceneState(app, visualNovelText, messageId) {
 }
 
 // 战斗跨楼继承与骰子联动：只在战斗演出开启时读宿主；逐条交给扫描器，一有结论就停（没有战斗的聊天通常读 2~3 条）。
-async function resolveBattleContext(app, messageId) {
+async function resolveBattleContext(app, messageId, bridge) {
     if (!app || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return null;
     let cursor = Number(messageId);
     if (!Number.isFinite(cursor) || cursor < 0) return null;
@@ -250,13 +254,17 @@ async function resolveBattleContext(app, messageId) {
         }
         if (!previous || previous.id == null || Number(previous.id) === cursor) break;
         cursor = Number(previous.id);
-        if (scanner.push({ isUser: previous.isUser === true, text: getMessagePrimaryText(previous) })) break;
+        if (scanner.push({
+            isUser: previous.isUser === true,
+            // 用户楼保留检定块；AI 楼先清洗，思维链里的战斗标签不继承。
+            text: previous.isUser === true ? getMessagePrimaryText(previous) : messageSyntaxText(previous, bridge),
+        })) break;
     }
     return scanner.result();
 }
 
 // 直播跨楼继承：只在直播间开启时向前读宿主原文，找到最近的开播 / 下播信号为止。
-async function resolveLiveContext(app, messageId) {
+async function resolveLiveContext(app, messageId, bridge) {
     if (!app || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return null;
     let cursor = Number(messageId);
     if (!Number.isFinite(cursor) || cursor < 0) return null;
@@ -271,13 +279,13 @@ async function resolveLiveContext(app, messageId) {
         }
         if (!previous || previous.id == null || Number(previous.id) === cursor) break;
         cursor = Number(previous.id);
-        if (scanner.push({ isUser: previous.isUser === true, text: getMessagePrimaryText(previous) })) break;
+        if (scanner.push({ isUser: previous.isUser === true, text: messageSyntaxText(previous, bridge) })) break;
     }
     return scanner.result();
 }
 
 // 舆论风暴跨楼继承：只在手机社区与风暴都开启时向前读宿主原文，找到最近的 storm / storm-end 为止。
-async function resolveStormContext(app, messageId) {
+async function resolveStormContext(app, messageId, bridge) {
     if (!app || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return null;
     let cursor = Number(messageId);
     if (!Number.isFinite(cursor) || cursor < 0) return null;
@@ -291,7 +299,7 @@ async function resolveStormContext(app, messageId) {
         }
         if (!previous || previous.id == null || Number(previous.id) === cursor) break;
         cursor = Number(previous.id);
-        if (scanner.push({ isUser: previous.isUser === true, text: getMessagePrimaryText(previous) })) break;
+        if (scanner.push({ isUser: previous.isUser === true, text: messageSyntaxText(previous, bridge) })) break;
     }
     return scanner.result();
 }
@@ -299,8 +307,8 @@ async function resolveStormContext(app, messageId) {
 // 约定到期提醒：只在「约定」标签开启时读宿主原文，向前最多 PROMISE_LOOKBACK_FLOORS 层收集 promise 标签；
 // 来源永远是当前聊天楼层原文，楼层删除或 swipe 切换后自然失效，不写任何存储。
 export const PROMISE_LOOKBACK_FLOORS = 40;
-async function resolvePromiseHistory(app, message, messageId) {
-    const texts = [{ id: messageId, text: getMessagePrimaryText(message) }];
+async function resolvePromiseHistory(app, message, messageId, bridge) {
+    const texts = [{ id: messageId, text: messageSyntaxText(message, bridge) }];
     if (app && app.hostAdapter && typeof app.hostAdapter.getAdjacentMessage === 'function') {
         let cursor = Number(messageId);
         for (let step = 0; Number.isFinite(cursor) && cursor >= 0 && step < PROMISE_LOOKBACK_FLOORS; step += 1) {
@@ -312,14 +320,14 @@ async function resolvePromiseHistory(app, message, messageId) {
             }
             if (!previous || previous.id == null || Number(previous.id) === cursor) break;
             cursor = Number(previous.id);
-            texts.unshift({ id: previous.id, text: getMessagePrimaryText(previous) });
+            texts.unshift({ id: previous.id, text: messageSyntaxText(previous, bridge) });
         }
     }
     return collectPromises(texts);
 }
 
 // 服装跨楼继承：同一 3 楼窗口内按角色取最近一次服装栏，较近楼层优先；无登记服装时不追溯。
-async function resolveInheritedOutfits(app, sceneAssets, messageId) {
+async function resolveInheritedOutfits(app, sceneAssets, messageId, bridge) {
     const outfits = normalizeCharacterOutfits(sceneAssets && sceneAssets.characterOutfits);
     if (!Object.keys(outfits).length) return {};
     if (!app || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return {};
@@ -340,7 +348,7 @@ async function resolveInheritedOutfits(app, sceneAssets, messageId) {
         if (!previous || previous.id == null || Number(previous.id) === cursor) return result;
         cursor = Number(previous.id);
         const latest = collectLatestOutfits(
-            extractSceneDirectives(getMessagePrimaryText(previous), { outfitResolver }).directives,
+            extractSceneDirectives(messageSyntaxText(previous, bridge), { outfitResolver }).directives,
             resolveKey,
         );
         for (const [key, value] of Object.entries(latest)) {
@@ -351,7 +359,7 @@ async function resolveInheritedOutfits(app, sceneAssets, messageId) {
 }
 
 // 旁白点名跨楼判断：前 3 个 AI 楼里说过话 / 有心理活动的角色名。本楼没露面但在这里面的用默认，不在的视为久违提到、不出立绘。
-async function resolveRecentCast(app, messageId) {
+async function resolveRecentCast(app, messageId, bridge) {
     if (!app || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return [];
     const names = new Set();
     let cursor = Number(messageId);
@@ -365,7 +373,7 @@ async function resolveRecentCast(app, messageId) {
         }
         if (!previous || previous.id == null || Number(previous.id) === cursor) break;
         cursor = Number(previous.id);
-        for (const d of extractSceneDirectives(getMessagePrimaryText(previous)).directives) {
+        for (const d of extractSceneDirectives(messageSyntaxText(previous, bridge)).directives) {
             if ((d.type === 'char' || d.type === 'thought') && d.character) names.add(String(d.character));
         }
     }
@@ -374,7 +382,7 @@ async function resolveRecentCast(app, messageId) {
 
 // 恐怖档位跨楼层延续：本楼没有 [igs-dread:N] 时，向前最多追溯 6 个楼层取最近的一个；都没有返回 null。
 const INHERITED_DREAD_MAX_FLOORS = 6;
-async function resolveInheritedDread(app, messageId) {
+async function resolveInheritedDread(app, messageId, bridge) {
     const startId = Number(messageId);
     if (!Number.isFinite(startId) || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return null;
     let cursor = startId;
@@ -387,7 +395,7 @@ async function resolveInheritedDread(app, messageId) {
         }
         if (!previous || previous.id == null || Number(previous.id) === cursor) return null;
         cursor = Number(previous.id);
-        const level = findLastDreadLevel(getMessagePrimaryText(previous));
+        const level = findLastDreadLevel(messageSyntaxText(previous, bridge));
         if (level !== null) return level;
     }
     return null;
@@ -413,33 +421,33 @@ async function buildReaderPayload(app, message, messageId, readerMode) {
     // （AI 漏发 [igs-scene:]，正文照常输出）才向前最多追溯 3 个 AI 楼层。
     const sceneAssetsEnabled = Boolean(bridge.sceneAssets && bridge.sceneAssets.enabled);
     const inheritedSceneState = sceneAssetsEnabled
-        ? await resolveInheritedSceneState(app, visualNovelText, messageId)
+        ? await resolveInheritedSceneState(app, visualNovelText, messageId, bridge)
         : null;
     const inheritedOutfits = sceneAssetsEnabled
-        ? await resolveInheritedOutfits(app, bridge.sceneAssets, messageId)
+        ? await resolveInheritedOutfits(app, bridge.sceneAssets, messageId, bridge)
         : {};
     const recentCast = sceneAssetsEnabled && bridge.sceneAssets.narrationNameSwitch !== false
-        ? await resolveRecentCast(app, messageId)
+        ? await resolveRecentCast(app, messageId, bridge)
         : [];
     // 只有恐怖世界观、且本楼没写档位时才向前追溯。
-    const inheritedDread = resolveWorldview(sceneAssetsForContext(bridge.sceneAssets, getSillyTavernContext())) === 'horror' && findLastDreadLevel(getMessagePrimaryText(message)) === null
-        ? await resolveInheritedDread(app, messageId)
+    const inheritedDread = resolveWorldview(sceneAssetsForContext(bridge.sceneAssets, getSillyTavernContext())) === 'horror' && findLastDreadLevel(messageSyntaxText(message, bridge)) === null
+        ? await resolveInheritedDread(app, messageId, bridge)
         : null;
     const battleFxSettings = unifiedSettings && unifiedSettings.readerSettings && unifiedSettings.readerSettings.battleFx;
     const battleContext = battleFxSettings && battleFxSettings.enabled === true
-        ? await resolveBattleContext(app, messageId)
+        ? await resolveBattleContext(app, messageId, bridge)
         : null;
     const liveFxSettings = unifiedSettings && unifiedSettings.readerSettings && unifiedSettings.readerSettings.liveFx;
     const liveContext = liveFxSettings && liveFxSettings.enabled === true
-        ? await resolveLiveContext(app, messageId)
+        ? await resolveLiveContext(app, messageId, bridge)
         : null;
     const feedFxSettings = unifiedSettings && unifiedSettings.readerSettings && unifiedSettings.readerSettings.feedFx;
     const stormContext = feedFxSettings && feedFxSettings.enabled === true && !(feedFxSettings.storm && feedFxSettings.storm.enabled === false)
-        ? await resolveStormContext(app, messageId)
+        ? await resolveStormContext(app, messageId, bridge)
         : null;
     const fxTagSettings = unifiedSettings && unifiedSettings.readerSettings && unifiedSettings.readerSettings.fxTags;
     const promiseHistory = fxTagSettings && fxTagSettings.enabled === true && fxTagSettings.promise === true
-        ? await resolvePromiseHistory(app, message, messageId)
+        ? await resolvePromiseHistory(app, message, messageId, bridge)
         : null;
     const textScene = parseSceneText(
         visualNovelText.formattedText || visualNovelText.visibleText || visualNovelText.cleanedRaw || '',

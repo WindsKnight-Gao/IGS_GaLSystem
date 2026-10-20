@@ -3608,6 +3608,62 @@ function buildBridgeImageSource(raw, filter) {
     source = removeTagBlocks(source, cfg.imageExcludeTags);
     return source.trim();
 }
+
+const BUILTIN_CLEAN_PATTERNS = new Set(DEFAULT_VIRTUAL_REGEX_RULES.map((rule) => rule.pattern));
+
+function virtualRegexRuleList(rule) {
+    const cfg = normalizeVirtualRegex(rule);
+    if (!cfg.enabled) return [];
+    return [{ pattern: cfg.pattern, flags: cfg.flags, replacement: cfg.replacement }, ...cfg.rules]
+        .filter((item) => item.pattern);
+}
+
+function isDeletionRule(rule) {
+    return String(rule && rule.replacement || '') === '';
+}
+
+function applyRegexRuleList(text, rules) {
+    return rules.reduce((current, rule) => {
+        try {
+            return String(current || '').replace(new RegExp(rule.pattern, rule.flags), rule.replacement);
+        } catch (error) {
+            return current;
+        }
+    }, String(text || ''));
+}
+
+// 图片保留标签同时出现在正文排除里：正文不显示，但配图扫描还要读到。
+// 先删其余排除块，包在思维链里的图片会一起去掉。
+function narrativeExcludeTags(sourceFilter) {
+    const imageTags = new Set(parseTagList(sourceFilter.imageIncludeTags).map((tag) => tag.toLowerCase()));
+    return parseTagList(sourceFilter.textExcludeTags)
+        .filter((tag) => !imageTags.has(tag.toLowerCase()))
+        .join('\n');
+}
+
+// 语法扫描之前的清洗：去掉排除块，并执行「替换为空」的正文规则。
+// 会改写 [igs-char:] 的格式化规则仍留在指令提取之后，避免先把语法拆掉。
+function cleanReaderSource(raw, sourceFilter, virtualRegex) {
+    const cfg = normalizeSourceFilter(sourceFilter);
+    let source = String(raw || '');
+    if (cfg.enabled) {
+        if (cfg.stripHtmlComments) source = stripHtmlComments(source);
+        source = removeTagBlocks(source, narrativeExcludeTags(cfg));
+    }
+    const deletions = virtualRegexRuleList(virtualRegex).filter(isDeletionRule);
+    return deletions.length ? applyRegexRuleList(source, deletions) : source;
+}
+
+// 原文里有排除块，或用户自己的「替换为空」规则改动了原文。内置 HTML 注释规则不算。
+function readerSourceExcluded(raw, sourceFilter, virtualRegex) {
+    const cfg = normalizeSourceFilter(sourceFilter);
+    const original = String(raw || '');
+    if (cfg.enabled && hasTagBlocks(original, cfg.textExcludeTags)) return true;
+    const userDeletions = virtualRegexRuleList(virtualRegex)
+        .filter((rule) => isDeletionRule(rule) && !BUILTIN_CLEAN_PATTERNS.has(rule.pattern));
+    if (!userDeletions.length) return false;
+    return applyRegexRuleList(original, userDeletions) !== original;
+}
 function applyImmersiveGalgameSystemBodyFormat(raw, rule, outfitResolver = null) {
     const source = String(raw || '');
     const cfg = normalizeVirtualRegex(rule);
@@ -3815,16 +3871,18 @@ function readerBodyText(raw, sourceFilter) {
 function buildIgsTextPayload(message, options = {}) {
     const originalRaw = getMessagePrimaryText(message);
     const sourceFilter = normalizeSourceFilter(options.sourceFilter);
-    const markerLayoutSource = normalizeImageMarkerLayout(originalRaw);
+    const virtualRegex = normalizeVirtualRegex(options.virtualRegex);
+    // 聊天块、HTML 卡片和场景指令都只看清洗后的正文，排除块里的语法不再提前生效。
+    const syntaxSource = cleanReaderSource(originalRaw, sourceFilter, virtualRegex);
+    const markerLayoutSource = normalizeImageMarkerLayout(syntaxSource);
     const htmlCardResult = extractHtmlCards(markerLayoutSource, parseTagList(sourceFilter.htmlCardTags));
     const chatResult = extractChatBlocks(htmlCardResult.text);
     // 指令写走样、或和旁白挤在同一行时先理顺：分页、正文格式化和指令归属都从这份文本出发，三者才对得上。
     const raw = normalizeIgsDirectiveLayout(chatResult.text);
     const htmlCards = htmlCardResult.cards;
     const chats = chatResult.chats;
-    const virtualRegex = normalizeVirtualRegex(options.virtualRegex);
-    const visibleText = normalizeIgsDirectiveLayout(resolveVisibleText(message, options.visibleText));
-    const hasExcludedBlocks = sourceFilter.enabled && hasTagBlocks(raw, sourceFilter.textExcludeTags);
+    const visibleText = normalizeIgsDirectiveLayout(cleanReaderSource(resolveVisibleText(message, options.visibleText), sourceFilter, virtualRegex));
+    const hasExcludedBlocks = readerSourceExcluded(originalRaw, sourceFilter, virtualRegex);
     // Once DOM has flattened a removed block into plain text, its boundaries cannot be recovered.
     const safeVisibleText = hasExcludedBlocks ? '' : (sourceFilter.enabled
         ? normalizeWhitespace(removeTagBlocks(visibleText, sourceFilter.textExcludeTags)) : visibleText);
@@ -4290,6 +4348,8 @@ __igsDefine(exports, "cleanNarrativeSource", () => cleanNarrativeSource);
 __igsDefine(exports, "normalizeSourceFilter", () => normalizeSourceFilter);
 __igsDefine(exports, "normalizeVirtualRegex", () => normalizeVirtualRegex);
 __igsDefine(exports, "buildBridgeImageSource", () => buildBridgeImageSource);
+__igsDefine(exports, "cleanReaderSource", () => cleanReaderSource);
+__igsDefine(exports, "readerSourceExcluded", () => readerSourceExcluded);
 __igsDefine(exports, "applyImmersiveGalgameSystemBodyFormat", () => applyImmersiveGalgameSystemBodyFormat);
 __igsDefine(exports, "buildFormattedReaderSource", () => buildFormattedReaderSource);
 __igsDefine(exports, "applySentencePaging", () => applySentencePaging);
@@ -9004,7 +9064,7 @@ const { findLastDreadLevel } = require("src/scene/horror.js");
 const { resolveWorldview } = require("src/scene/worldview.js");
 const { sceneAssetsForContext } = require("src/scene/asset-scope.js");
 const { getSillyTavernContext } = require("src/host/tavern-helper-adapter.js");
-const { buildIgsTextPayload, getMessagePrimaryText } = require("src/scene/message-source.js");
+const { buildIgsTextPayload, cleanReaderSource, getMessagePrimaryText } = require("src/scene/message-source.js");
 const { extractSceneDirectives, resolveLatestSceneDirective } = require("src/scene/scene-directives.js");
 const { BATTLE_CHAIN_MAX_FLOORS, createBattleHistoryScanner } = require("src/scene/battle-context.js");
 const { collectPromises } = require("src/scene/promise-reminder.js");
@@ -9209,7 +9269,11 @@ function cloneData(value) {
 // 楼层中标签之前的段落没有本楼场景可归属，由消费点回退到这里的继承场景。
 const INHERITED_SCENE_MAX_FLOORS = 3;
 
-async function resolveInheritedSceneState(app, visualNovelText, messageId) {
+function messageSyntaxText(message, bridge) {
+    return cleanReaderSource(getMessagePrimaryText(message), bridge && bridge.sourceFilter, bridge && bridge.virtualRegex);
+}
+
+async function resolveInheritedSceneState(app, visualNovelText, messageId, bridge) {
     if (!app || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return null;
     const normalizedId = Number(messageId);
     if (!Number.isFinite(normalizedId) || normalizedId < 0) return null;
@@ -9225,7 +9289,7 @@ async function resolveInheritedSceneState(app, visualNovelText, messageId) {
         if (!previous || previous.id == null || Number(previous.id) === cursor) return null;
         cursor = Number(previous.id);
         const inherited = resolveLatestSceneDirective(
-            extractSceneDirectives(getMessagePrimaryText(previous)).directives,
+            extractSceneDirectives(messageSyntaxText(previous, bridge)).directives,
         );
         if (inherited) return { ...inherited, inheritedFromMessageId: cursor };
     }
@@ -9233,7 +9297,7 @@ async function resolveInheritedSceneState(app, visualNovelText, messageId) {
 }
 
 // 战斗跨楼继承与骰子联动：只在战斗演出开启时读宿主；逐条交给扫描器，一有结论就停（没有战斗的聊天通常读 2~3 条）。
-async function resolveBattleContext(app, messageId) {
+async function resolveBattleContext(app, messageId, bridge) {
     if (!app || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return null;
     let cursor = Number(messageId);
     if (!Number.isFinite(cursor) || cursor < 0) return null;
@@ -9247,13 +9311,17 @@ async function resolveBattleContext(app, messageId) {
         }
         if (!previous || previous.id == null || Number(previous.id) === cursor) break;
         cursor = Number(previous.id);
-        if (scanner.push({ isUser: previous.isUser === true, text: getMessagePrimaryText(previous) })) break;
+        if (scanner.push({
+            isUser: previous.isUser === true,
+            // 用户楼保留检定块；AI 楼先清洗，思维链里的战斗标签不继承。
+            text: previous.isUser === true ? getMessagePrimaryText(previous) : messageSyntaxText(previous, bridge),
+        })) break;
     }
     return scanner.result();
 }
 
 // 直播跨楼继承：只在直播间开启时向前读宿主原文，找到最近的开播 / 下播信号为止。
-async function resolveLiveContext(app, messageId) {
+async function resolveLiveContext(app, messageId, bridge) {
     if (!app || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return null;
     let cursor = Number(messageId);
     if (!Number.isFinite(cursor) || cursor < 0) return null;
@@ -9268,13 +9336,13 @@ async function resolveLiveContext(app, messageId) {
         }
         if (!previous || previous.id == null || Number(previous.id) === cursor) break;
         cursor = Number(previous.id);
-        if (scanner.push({ isUser: previous.isUser === true, text: getMessagePrimaryText(previous) })) break;
+        if (scanner.push({ isUser: previous.isUser === true, text: messageSyntaxText(previous, bridge) })) break;
     }
     return scanner.result();
 }
 
 // 舆论风暴跨楼继承：只在手机社区与风暴都开启时向前读宿主原文，找到最近的 storm / storm-end 为止。
-async function resolveStormContext(app, messageId) {
+async function resolveStormContext(app, messageId, bridge) {
     if (!app || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return null;
     let cursor = Number(messageId);
     if (!Number.isFinite(cursor) || cursor < 0) return null;
@@ -9288,7 +9356,7 @@ async function resolveStormContext(app, messageId) {
         }
         if (!previous || previous.id == null || Number(previous.id) === cursor) break;
         cursor = Number(previous.id);
-        if (scanner.push({ isUser: previous.isUser === true, text: getMessagePrimaryText(previous) })) break;
+        if (scanner.push({ isUser: previous.isUser === true, text: messageSyntaxText(previous, bridge) })) break;
     }
     return scanner.result();
 }
@@ -9296,8 +9364,8 @@ async function resolveStormContext(app, messageId) {
 // 约定到期提醒：只在「约定」标签开启时读宿主原文，向前最多 PROMISE_LOOKBACK_FLOORS 层收集 promise 标签；
 // 来源永远是当前聊天楼层原文，楼层删除或 swipe 切换后自然失效，不写任何存储。
 const PROMISE_LOOKBACK_FLOORS = 40;
-async function resolvePromiseHistory(app, message, messageId) {
-    const texts = [{ id: messageId, text: getMessagePrimaryText(message) }];
+async function resolvePromiseHistory(app, message, messageId, bridge) {
+    const texts = [{ id: messageId, text: messageSyntaxText(message, bridge) }];
     if (app && app.hostAdapter && typeof app.hostAdapter.getAdjacentMessage === 'function') {
         let cursor = Number(messageId);
         for (let step = 0; Number.isFinite(cursor) && cursor >= 0 && step < PROMISE_LOOKBACK_FLOORS; step += 1) {
@@ -9309,14 +9377,14 @@ async function resolvePromiseHistory(app, message, messageId) {
             }
             if (!previous || previous.id == null || Number(previous.id) === cursor) break;
             cursor = Number(previous.id);
-            texts.unshift({ id: previous.id, text: getMessagePrimaryText(previous) });
+            texts.unshift({ id: previous.id, text: messageSyntaxText(previous, bridge) });
         }
     }
     return collectPromises(texts);
 }
 
 // 服装跨楼继承：同一 3 楼窗口内按角色取最近一次服装栏，较近楼层优先；无登记服装时不追溯。
-async function resolveInheritedOutfits(app, sceneAssets, messageId) {
+async function resolveInheritedOutfits(app, sceneAssets, messageId, bridge) {
     const outfits = normalizeCharacterOutfits(sceneAssets && sceneAssets.characterOutfits);
     if (!Object.keys(outfits).length) return {};
     if (!app || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return {};
@@ -9337,7 +9405,7 @@ async function resolveInheritedOutfits(app, sceneAssets, messageId) {
         if (!previous || previous.id == null || Number(previous.id) === cursor) return result;
         cursor = Number(previous.id);
         const latest = collectLatestOutfits(
-            extractSceneDirectives(getMessagePrimaryText(previous), { outfitResolver }).directives,
+            extractSceneDirectives(messageSyntaxText(previous, bridge), { outfitResolver }).directives,
             resolveKey,
         );
         for (const [key, value] of Object.entries(latest)) {
@@ -9348,7 +9416,7 @@ async function resolveInheritedOutfits(app, sceneAssets, messageId) {
 }
 
 // 旁白点名跨楼判断：前 3 个 AI 楼里说过话 / 有心理活动的角色名。本楼没露面但在这里面的用默认，不在的视为久违提到、不出立绘。
-async function resolveRecentCast(app, messageId) {
+async function resolveRecentCast(app, messageId, bridge) {
     if (!app || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return [];
     const names = new Set();
     let cursor = Number(messageId);
@@ -9362,7 +9430,7 @@ async function resolveRecentCast(app, messageId) {
         }
         if (!previous || previous.id == null || Number(previous.id) === cursor) break;
         cursor = Number(previous.id);
-        for (const d of extractSceneDirectives(getMessagePrimaryText(previous)).directives) {
+        for (const d of extractSceneDirectives(messageSyntaxText(previous, bridge)).directives) {
             if ((d.type === 'char' || d.type === 'thought') && d.character) names.add(String(d.character));
         }
     }
@@ -9371,7 +9439,7 @@ async function resolveRecentCast(app, messageId) {
 
 // 恐怖档位跨楼层延续：本楼没有 [igs-dread:N] 时，向前最多追溯 6 个楼层取最近的一个；都没有返回 null。
 const INHERITED_DREAD_MAX_FLOORS = 6;
-async function resolveInheritedDread(app, messageId) {
+async function resolveInheritedDread(app, messageId, bridge) {
     const startId = Number(messageId);
     if (!Number.isFinite(startId) || !app.hostAdapter || typeof app.hostAdapter.getAdjacentMessage !== 'function') return null;
     let cursor = startId;
@@ -9384,7 +9452,7 @@ async function resolveInheritedDread(app, messageId) {
         }
         if (!previous || previous.id == null || Number(previous.id) === cursor) return null;
         cursor = Number(previous.id);
-        const level = findLastDreadLevel(getMessagePrimaryText(previous));
+        const level = findLastDreadLevel(messageSyntaxText(previous, bridge));
         if (level !== null) return level;
     }
     return null;
@@ -9410,33 +9478,33 @@ async function buildReaderPayload(app, message, messageId, readerMode) {
     // （AI 漏发 [igs-scene:]，正文照常输出）才向前最多追溯 3 个 AI 楼层。
     const sceneAssetsEnabled = Boolean(bridge.sceneAssets && bridge.sceneAssets.enabled);
     const inheritedSceneState = sceneAssetsEnabled
-        ? await resolveInheritedSceneState(app, visualNovelText, messageId)
+        ? await resolveInheritedSceneState(app, visualNovelText, messageId, bridge)
         : null;
     const inheritedOutfits = sceneAssetsEnabled
-        ? await resolveInheritedOutfits(app, bridge.sceneAssets, messageId)
+        ? await resolveInheritedOutfits(app, bridge.sceneAssets, messageId, bridge)
         : {};
     const recentCast = sceneAssetsEnabled && bridge.sceneAssets.narrationNameSwitch !== false
-        ? await resolveRecentCast(app, messageId)
+        ? await resolveRecentCast(app, messageId, bridge)
         : [];
     // 只有恐怖世界观、且本楼没写档位时才向前追溯。
-    const inheritedDread = resolveWorldview(sceneAssetsForContext(bridge.sceneAssets, getSillyTavernContext())) === 'horror' && findLastDreadLevel(getMessagePrimaryText(message)) === null
-        ? await resolveInheritedDread(app, messageId)
+    const inheritedDread = resolveWorldview(sceneAssetsForContext(bridge.sceneAssets, getSillyTavernContext())) === 'horror' && findLastDreadLevel(messageSyntaxText(message, bridge)) === null
+        ? await resolveInheritedDread(app, messageId, bridge)
         : null;
     const battleFxSettings = unifiedSettings && unifiedSettings.readerSettings && unifiedSettings.readerSettings.battleFx;
     const battleContext = battleFxSettings && battleFxSettings.enabled === true
-        ? await resolveBattleContext(app, messageId)
+        ? await resolveBattleContext(app, messageId, bridge)
         : null;
     const liveFxSettings = unifiedSettings && unifiedSettings.readerSettings && unifiedSettings.readerSettings.liveFx;
     const liveContext = liveFxSettings && liveFxSettings.enabled === true
-        ? await resolveLiveContext(app, messageId)
+        ? await resolveLiveContext(app, messageId, bridge)
         : null;
     const feedFxSettings = unifiedSettings && unifiedSettings.readerSettings && unifiedSettings.readerSettings.feedFx;
     const stormContext = feedFxSettings && feedFxSettings.enabled === true && !(feedFxSettings.storm && feedFxSettings.storm.enabled === false)
-        ? await resolveStormContext(app, messageId)
+        ? await resolveStormContext(app, messageId, bridge)
         : null;
     const fxTagSettings = unifiedSettings && unifiedSettings.readerSettings && unifiedSettings.readerSettings.fxTags;
     const promiseHistory = fxTagSettings && fxTagSettings.enabled === true && fxTagSettings.promise === true
-        ? await resolvePromiseHistory(app, message, messageId)
+        ? await resolvePromiseHistory(app, message, messageId, bridge)
         : null;
     const textScene = parseSceneText(
         visualNovelText.formattedText || visualNovelText.visibleText || visualNovelText.cleanedRaw || '',
