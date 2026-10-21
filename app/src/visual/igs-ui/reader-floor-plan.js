@@ -14,7 +14,8 @@ import { characterDnaText, detectVoiceGender } from './voice-bark.js';
 import { prepareEventCgPages } from '../../scene/event-cg.js';
 import { normalizeItemName } from '../../data/shujuku/item-catalog.js';
 
-// 正文格式化常把半角标点换成全角。认领角色和回原文定位时，成对的两种写法视为同一个字。
+// 正文格式化常把半角标点换成全角，或把三个及以上的英文句点换成省略号。
+// 认领角色和回原文定位时，成对的两种写法视为同一个字。
 const READER_PUNCT_FOLD = new Map([
     [',', '，'], ['，', '，'], ['?', '？'], ['？', '？'], ['!', '！'], ['！', '！'],
     [':', '：'], ['：', '：'], [';', '；'], ['；', '；'], ['~', '～'], ['～', '～'],
@@ -22,8 +23,35 @@ const READER_PUNCT_FOLD = new Map([
     ['(', '（'], ['（', '（'], [')', '）'], ['）', '）'],
 ]);
 
+function ellipsisRunEnd(src, index) {
+    const ch = src[index];
+    if (ch !== '.' && ch !== '…') return index;
+    let end = index + 1;
+    while (end < src.length && src[end] === ch) end += 1;
+    if (ch === '.' && end - index >= 3) return end;
+    if (ch === '…' && end - index >= 2) return end;
+    return index;
+}
+
+function forEachFoldedPunctuation(text, emit) {
+    const src = String(text || '');
+    for (let i = 0; i < src.length; ) {
+        const end = ellipsisRunEnd(src, i);
+        if (end > i) {
+            emit('…', i);
+            emit('…', end - 1);
+            i = end;
+            continue;
+        }
+        emit(READER_PUNCT_FOLD.get(src[i]) || src[i], i);
+        i += 1;
+    }
+}
+
 function foldReaderPunctuation(text) {
-    return String(text || '').replace(/[,，?？!！:：;；~～'‘’"“”（）()]/g, (ch) => READER_PUNCT_FOLD.get(ch) || ch);
+    let out = '';
+    forEachFoldedPunctuation(text, (ch) => { out += ch; });
+    return out;
 }
 
 export function stripSegmentSpeaker(text) {
@@ -66,11 +94,11 @@ export function createFloorSourceLocator(source) {
         if (!loose) return -1;
         if (flat === null) {
             const chars = [], map = [];
-            for (let i = 0; i < src.length; i += 1) {
-                const ch = foldReaderPunctuation(src[i]);
-                if (/[\s*（）\[\]]/.test(ch)) continue;
-                chars.push(ch); map.push(i);
-            }
+            forEachFoldedPunctuation(src, (ch, index) => {
+                if (/[\s*（）\[\]]/.test(ch)) return;
+                chars.push(ch);
+                map.push(index);
+            });
             flat = chars.join(''); positions = map; looseBuilds += 1;
         }
         let lo = 0, hi = positions.length;

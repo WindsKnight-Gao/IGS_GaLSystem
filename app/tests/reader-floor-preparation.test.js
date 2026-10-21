@@ -221,6 +221,7 @@ test('gate:reader:thought-punctuation-fold-keeps-speaker-and-background', () => 
             { pattern: '"', flags: 'g', replacement: '”' },
             { pattern: '\\(', flags: 'g', replacement: '（' },
             { pattern: '\\)', flags: 'g', replacement: '）' },
+            { pattern: '\\.{3,}', flags: 'g', replacement: '……' },
         ],
     };
     const prepare = (raw, dialogueSentencePaging = false) => {
@@ -251,6 +252,13 @@ test('gate:reader:thought-punctuation-fold-keeps-speaker-and-background', () => 
     assert.equal(shouted.textType, 'thought');
     assert.equal(shouted.bubbleSpeaker, '小雪');
     assert.equal(shouted.sceneStateForBg.scene, '教室');
+    const trailed = prepare('[igs-scene:操场|白天|晴]\n她跑着。\n[igs-scene:教室|夜晚|晴]\n[igs-thought:小雪|紧张|校服|他终于走了...]\n[igs-thought:小雪|紧张|校服|再等等....]');
+    for (const needle of ['他终于走了', '再等等']) {
+        const page = pageOf(trailed, needle);
+        assert.equal(page.textType, 'thought');
+        assert.equal(page.bubbleSpeaker, '小雪');
+        assert.equal(page.sceneStateForBg.scene, '教室');
+    }
     const paged = prepare('[igs-scene:教室|夜晚|晴]\n[igs-thought:小雪|紧张|校服|他来了吗?我走!]', true);
     for (const needle of ['他来了', '我走']) {
         const page = pageOf(paged, needle);
