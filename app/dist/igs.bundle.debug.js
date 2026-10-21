@@ -110619,6 +110619,17 @@ const { isSystemRole } = require("src/visual/igs-ui/system-role.js");
 const { characterDnaText, detectVoiceGender } = require("src/visual/igs-ui/voice-bark.js");
 const { prepareEventCgPages } = require("src/scene/event-cg.js");
 const { normalizeItemName } = require("src/data/shujuku/item-catalog.js");
+// 正文格式化常把半角标点换成全角。认领角色和回原文定位时，成对的两种写法视为同一个字。
+const READER_PUNCT_FOLD = new Map([
+    [',', '，'], ['，', '，'], ['?', '？'], ['？', '？'], ['!', '！'], ['！', '！'],
+    [':', '：'], ['：', '：'], [';', '；'], ['；', '；'], ['~', '～'], ['～', '～'],
+    ["'", '’'], ['‘', '’'], ['’', '’'], ['"', '”'], ['“', '”'], ['”', '”'],
+    ['(', '（'], ['（', '（'], [')', '）'], ['）', '）'],
+]);
+
+function foldReaderPunctuation(text) {
+    return String(text || '').replace(/[,，?？!！:：;；~～'‘’"“”（）()]/g, (ch) => READER_PUNCT_FOLD.get(ch) || ch);
+}
 function stripSegmentSpeaker(text) {
     return String(text || '').trim().replace(/^\*+|\*+$/g, '').replace(/^\s*\[[^\]\n]*\][：:]\s*/, '');
 }
@@ -110653,13 +110664,14 @@ function createFloorSourceLocator(source) {
         const start = Math.max(0, Number(from) || 0);
         const exact = src.indexOf(needle, start);
         if (exact >= 0 && exact + needle.length <= end) return exact;
-        const loose = needle.replace(/[\s*（）\[\]]+/g, '');
+        const loose = foldReaderPunctuation(needle).replace(/[\s*（）\[\]]+/g, '');
         if (!loose) return -1;
         if (flat === null) {
             const chars = [], map = [];
             for (let i = 0; i < src.length; i += 1) {
-                if (/[\s*（）\[\]]/.test(src[i])) continue;
-                chars.push(src[i]); map.push(i);
+                const ch = foldReaderPunctuation(src[i]);
+                if (/[\s*（）\[\]]/.test(ch)) continue;
+                chars.push(ch); map.push(i);
             }
             flat = chars.join(''); positions = map; looseBuilds += 1;
         }
@@ -110685,7 +110697,7 @@ function createFloorSourceLocator(source) {
 // 旁白里常见、情绪词库没收的说法，换成默认情绪组名。
 const NARRATION_MOOD_HINTS = Object.freeze({ 怒火: '愤怒', 恼怒: '愤怒', 气得: '愤怒', 动怒: '愤怒', 怒气: '愤怒', 恼火: '愤怒', 怒意: '愤怒' });
 
-const normalizeFingerprint = (s) => stripBilingualTranslation(s)
+const normalizeFingerprint = (s) => foldReaderPunctuation(stripBilingualTranslation(s))
     .replace(/\*（[^）]*）\*/g, '').replace(/[\[\]\*（）]/g, '').replace(/\s+/g, '').trim();
 
 function titleBroadcastSettings(readerSettings) {

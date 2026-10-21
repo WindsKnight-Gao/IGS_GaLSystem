@@ -198,6 +198,68 @@ test('预先准备的 CG 页计划保持现有 SFW/NSFW、换场、停留与新�
     }
 });
 
+test('gate:reader:thought-punctuation-fold-keeps-speaker-and-background', () => {
+    const sceneAssets = {
+        enabled: true,
+        scenes: { 教室: { url: 'room.png' }, 操场: { url: 'yard.png' } },
+        characters: { 小雪: { 紧张: 'a.png' } },
+        characterOutfits: { 小雪: { 校服: { words: ['校服'], moods: {} } } },
+    };
+    const virtualRegex = {
+        enabled: true,
+        pattern: '\\[igs-char:([^|\\]\\n]+)\\|(?:[^|\\]\\n]*\\|)?([^\\]\\n]+)\\]?',
+        flags: 'gm',
+        replacement: '[$1]：$2',
+        rules: [
+            { pattern: ',', flags: 'g', replacement: '，' },
+            { pattern: '\\?', flags: 'g', replacement: '？' },
+            { pattern: '!', flags: 'g', replacement: '！' },
+            { pattern: '(?<=[^A-Za-z]):', flags: 'g', replacement: '：' },
+            { pattern: ';', flags: 'g', replacement: '；' },
+            { pattern: '~', flags: 'g', replacement: '～' },
+            { pattern: "'", flags: 'g', replacement: '’' },
+            { pattern: '"', flags: 'g', replacement: '”' },
+            { pattern: '\\(', flags: 'g', replacement: '（' },
+            { pattern: '\\)', flags: 'g', replacement: '）' },
+        ],
+    };
+    const prepare = (raw, dialogueSentencePaging = false) => {
+        const extracted = buildIgsTextPayload(`<content>${raw}</content>`, { sceneAssets, virtualRegex, dialogueSentencePaging });
+        return prepareReaderFloor({
+            text: extracted.formattedText,
+            segments: extracted.textSegments,
+            extracted,
+            payload: extracted,
+            scene: {},
+            readerSettings: { _sceneAssets: sceneAssets, titleCard: { enabled: true } },
+        });
+    };
+    const pageOf = (floor, needle) => floor.pages.find((page) => String(page.segmentBody || '').includes(needle));
+    const comma = pageOf(prepare('[igs-scene:教室|夜晚|晴]\n[igs-thought:小雪|紧张|校服|你好,世界。]'), '你好');
+    assert.equal(comma.textType, 'thought');
+    assert.equal(comma.bubbleSpeaker, '小雪');
+    assert.equal(comma.sceneStateForBg.scene, '教室');
+    const asked = pageOf(prepare('[igs-scene:操场|白天|晴]\n她跑着。\n[igs-scene:教室|夜晚|晴]\n[igs-thought:小雪|紧张|校服|他来了吗?]'), '他来了');
+    assert.equal(asked.textType, 'thought');
+    assert.equal(asked.bubbleSpeaker, '小雪');
+    assert.equal(asked.sceneStateForBg.scene, '教室');
+    const mixed = pageOf(prepare('[igs-scene:教室|夜晚|晴]\n[igs-thought:小雪|紧张|校服|看:这里;好~\'啊\'"呀"(完)。]'), '这里');
+    assert.equal(mixed.textType, 'thought');
+    assert.equal(mixed.bubbleSpeaker, '小雪');
+    assert.equal(mixed.sceneStateForBg.scene, '教室');
+    const shouted = pageOf(prepare('[igs-scene:教室|夜晚|晴]\n[igs-thought:小雪|紧张|校服|快走!]'), '快走');
+    assert.equal(shouted.textType, 'thought');
+    assert.equal(shouted.bubbleSpeaker, '小雪');
+    assert.equal(shouted.sceneStateForBg.scene, '教室');
+    const paged = prepare('[igs-scene:教室|夜晚|晴]\n[igs-thought:小雪|紧张|校服|他来了吗?我走!]', true);
+    for (const needle of ['他来了', '我走']) {
+        const page = pageOf(paged, needle);
+        assert.equal(page.textType, 'thought');
+        assert.equal(page.bubbleSpeaker, '小雪');
+        assert.equal(page.sceneStateForBg.scene, '教室');
+    }
+});
+
 test('相同场景不占页，只有地点或时间变化且对应开关开着才单独成页', () => {
     const sceneAssets = { enabled: true, scenes: { 室内: { url: 'in.png' }, 室外: { url: 'out.png' } }, characters: {} };
     const prepare = (raw, inheritedSceneState, titleCard = { enabled: true }) => {
