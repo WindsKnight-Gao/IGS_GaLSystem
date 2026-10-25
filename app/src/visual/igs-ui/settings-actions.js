@@ -3968,19 +3968,21 @@ export async function handleSettingsAction(action, ctx) {
         const globalObj = options.global || globalThis;
         const alias = ((await dialogs.prompt(`为场景「${sceneName}」添加别名：`, '')) || '').trim();
         if (alias) {
-            const scenes = (settingsState.draft.bridge.sceneAssets || {}).scenes || {};
-            if (Object.prototype.hasOwnProperty.call(scenes, alias)) {
+            const scene = sceneWordsTarget(settingsState, editTarget, sceneName);
+            const visible = (draftEffectiveAssets(settingsState) || {}).scenes || {};
+            if (Object.prototype.hasOwnProperty.call(visible, alias)) {
                 pageAlert(dialogs, globalObj, `「${alias}」已是场景主名称`);
                 return rerenderSettings();
             }
-            const dup = findSceneWord(scenes, alias);
-            if (dup) {
+            const dup = findSceneWord(visible, alias);
+            if (dup && dup.keys[0] !== sceneName) {
                 const proceed = await dialogs.confirm(`别名「${alias}」已属于${dup.label}。是否移动到场景「${sceneName}」？`);
                 if (!proceed) return rerenderSettings();
-                removeSceneWordEntry(scenes, dup);
+                removeSceneWordEntry(visible, dup);
+            } else if (dup) {
+                return rerenderSettings();
             }
-            const s = scenes[sceneName];
-            if (s && typeof s === 'object') { if (!Array.isArray(s.words)) s.words = []; s.words.push(alias); }
+            if (scene) scene.words.push(alias);
             const persisted = persistSettingsDraft();
             if (persisted.ok === false) return persisted;
         }
@@ -3992,11 +3994,8 @@ export async function handleSettingsAction(action, ctx) {
         const c = rest.indexOf(':');
         if (c > 0) {
             const sceneName = decodeSeg(rest.slice(0, c)); const word = decodeSeg(rest.slice(c + 1));
-            const scenes = (settingsState.draft.bridge.sceneAssets || {}).scenes || {};
-            const s = scenes[sceneName];
-            if (s && Array.isArray(s.words)) {
-                s.words = s.words.filter((w) => w !== word);
-            }
+            const scene = sceneWordsTarget(settingsState, editTarget, sceneName);
+            if (scene) scene.words = scene.words.filter((w) => w !== word);
             const persisted = persistSettingsDraft();
             if (persisted.ok === false) return persisted;
         }
@@ -4115,6 +4114,19 @@ function renameSetPrefix(set, oldPrefix, newPrefix) {
     const toUpdate = [];
     for (const key of set) if (key.startsWith(oldPrefix)) toUpdate.push(key);
     for (const k of toUpdate) { set.delete(k); set.add(newPrefix + k.slice(oldPrefix.length)); }
+}
+
+// 别名写在这条场景自己那一份上。本卡里的场景不能写进全局，否则列表重画后别名消失。
+function sceneWordsTarget(settingsState, editTarget, sceneName) {
+    const library = draftAssetLibrary(settingsState, editTarget);
+    const scenes = library.scenes = library.scenes || {};
+    if (!Object.prototype.hasOwnProperty.call(scenes, sceneName)) return null;
+    const current = scenes[sceneName];
+    if (typeof current === 'string') scenes[sceneName] = { url: current, words: [], times: {} };
+    const scene = scenes[sceneName];
+    if (!scene || typeof scene !== 'object' || Array.isArray(scene)) return null;
+    if (!Array.isArray(scene.words)) scene.words = [];
+    return scene;
 }
 
 function findSceneWord(scenes, word) {

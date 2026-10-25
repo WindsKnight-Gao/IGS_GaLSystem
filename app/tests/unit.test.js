@@ -2373,6 +2373,49 @@ test('gate:scene:asset-alias-actions-reuse-existing-entries', async () => {
     assert.ok(persistCount >= 5);
 });
 
+test('gate:scene:card-scene-alias-writes-to-the-owning-library', async () => {
+    const storage = createMemoryStorage();
+    const draft = {
+        bridge: {
+            sceneAssets: {
+                enabled: true,
+                scenes: { 旧城: { url: 'global.png', words: ['古城'], times: {} } },
+                cards: { 'card:小雪': { scenes: { 天台: 'roof.png' } } },
+            },
+        },
+        readerSettings: {},
+    };
+    const prompts = ['天台边', '古城'];
+    const confirms = [];
+    const ctx = {
+        state: { activeSettings: { draft, readerMode: 'pc', asyncState: {} } },
+        options: {
+            global: {
+                localStorage: storage,
+                SillyTavern: { getContext: () => ({ characterId: 0, characters: [{ name: '小雪' }], name2: '小雪' }) },
+                prompt: () => prompts.shift() || '',
+                confirm: (message) => { confirms.push(message); return true; },
+                alert: () => {},
+            },
+        },
+        closeSettings: () => ({ ok: true }),
+        persistSettingsDraft: () => ({ ok: true }),
+        rerenderSettings: () => ({ ok: true }),
+        buildRegexPreview: () => '',
+    };
+    await handleSettingsAction(`scene-add-bg-word:${encodeURIComponent('天台')}`, ctx);
+    const cardScene = draft.bridge.sceneAssets.cards['card:小雪'].scenes['天台'];
+    assert.equal(cardScene.url, 'roof.png');
+    assert.deepEqual(cardScene.words, ['天台边']);
+    assert.deepEqual(draft.bridge.sceneAssets.scenes['旧城'].words, ['古城']);
+    await handleSettingsAction(`scene-add-bg-word:${encodeURIComponent('天台')}`, ctx);
+    assert.deepEqual(cardScene.words, ['天台边', '古城']);
+    assert.deepEqual(draft.bridge.sceneAssets.scenes['旧城'].words, []);
+    assert.equal(confirms.length, 1);
+    await handleSettingsAction(`scene-remove-bg-word:${encodeURIComponent('天台')}:${encodeURIComponent('天台边')}`, ctx);
+    assert.deepEqual(cardScene.words, ['古城']);
+});
+
 test('gate:scene:settings-action-mood-groups-toggle-and-reset', async () => {
     const draft = { bridge: { sceneAssets: { enabled: true, scenes: {}, characters: { '小林': { '喜悦': '' } }, moodGroups: [{ label: '自定义', words: ['词A'] }] } }, readerSettings: {} };
     const asyncState = {};
