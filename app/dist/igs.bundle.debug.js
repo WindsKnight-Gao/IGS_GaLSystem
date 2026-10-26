@@ -38621,10 +38621,19 @@ function normalizeCharacterVoice(value) {
     };
 }
 
-// 朗读音量（倍）：0～1，0 表示这个角色不朗读；缺省 1。
+// 设置页按百分数填写，100 为原声。空着或不是数字时按 100。不设上限。
+function percentToTtsVolume(value) {
+    const text = String(value ?? '').trim();
+    if (!text) return 1;
+    const percent = Number(text);
+    if (!Number.isFinite(percent)) return 1;
+    return Math.max(0, Math.round(percent * 1000) / 100000);
+}
+
+// 朗读音量（倍）：0 表示这个角色不朗读，缺省 1，不设上限。
 function normalizeTtsVolume(value) {
     const volume = Number(value);
-    return value === undefined || value === null || value === '' || !Number.isFinite(volume) ? 1 : Math.max(0, Math.min(1, volume));
+    return value === undefined || value === null || value === '' || !Number.isFinite(volume) ? 1 : Math.max(0, volume);
 }
 function normalizeVoiceSpeed(value) {
     const speed = Number(value);
@@ -38915,7 +38924,7 @@ function buildBarkChain(context, out, { volume, pan, phone }, nodes) {
     const gain = context.createGain();
     const filter = getVoiceFilter();
     const earPan = (voiceFilterParams(filter) || {}).pan || 0;
-    gain.gain.value = Math.max(0, Math.min(GAIN_CAP, (Number(volume) || 0) * voiceFilterGain(filter)));
+    gain.gain.value = Math.max(0, (Number(volume) || 0) * voiceFilterGain(filter));
     nodes.push(gain);
     let tail = gain;
     const link = (node) => {
@@ -39008,6 +39017,7 @@ __igsDefine(exports, "voicePackOptions", () => voicePackOptions);
 __igsDefine(exports, "voicePackCredits", () => voicePackCredits);
 __igsDefine(exports, "normalizeVoiceBarkSettings", () => normalizeVoiceBarkSettings);
 __igsDefine(exports, "normalizeCharacterVoice", () => normalizeCharacterVoice);
+__igsDefine(exports, "percentToTtsVolume", () => percentToTtsVolume);
 __igsDefine(exports, "normalizeVoiceSpeed", () => normalizeVoiceSpeed);
 __igsDefine(exports, "normalizeCharacterVoices", () => normalizeCharacterVoices);
 __igsDefine(exports, "canonicalName", () => canonicalName);
@@ -50638,7 +50648,7 @@ const { SLOT_ICONS, menuItem, transferIcons, renderCharacterSlotTabs, renderRevi
 const { MAGIC_HOUSES, normalizeMagicHouse } = require("src/visual/igs-ui/dialog-theme-css-skins.js");
 const { resolveCharacterMagicHouse } = require("src/visual/igs-ui/magic-house.js");
 const { VOICE_PITCH_LIMIT, VOICE_SPEED_RANGE, normalizeCharacterVoice, resolveCharacterVoice, voicePackOptions } = require("src/visual/igs-ui/voice-bark.js");
-const { TTS_CHARACTER_VOLUMES, listSystemVoices, systemVoiceOptions, ttsApiVoiceOptions } = require("src/visual/igs-ui/tts.js");
+const { listSystemVoices, systemVoiceOptions, ttsApiVoiceOptions } = require("src/visual/igs-ui/tts.js");
 const { resolveSpriteBaseScale } = require("src/visual/igs-ui/sprite-height.js");
 const { hasCharacterSpriteLayout } = require("src/visual/igs-ui/sprite-key-migration.js");
 const encSeg = (value) => encodeURIComponent(String(value == null ? '' : value));
@@ -51188,6 +51198,11 @@ function voiceTuneOptions(manual) {
     return { pitchOpts, speedOpts };
 }
 
+function ttsVolumePercentText(volume) {
+    const percent = Math.round(Number(volume) * 1000) / 10;
+    return Number.isFinite(percent) ? String(percent) : '100';
+}
+
 // 台词朗读开着时：这个角色的朗读声音。留空就是不朗读，避免路人被默认声音念出来。
 function renderCharacterTtsRow(charName, { sceneAssets, tts }) {
     const voices = sceneAssets && typeof sceneAssets.characterVoices === 'object' ? sceneAssets.characterVoices || {} : {};
@@ -51197,14 +51212,14 @@ function renderCharacterTtsRow(charName, { sceneAssets, tts }) {
     if (manual.tts && !items.some(([id]) => id === manual.tts)) items.push([manual.tts, `${manual.tts}（不可用）`]);
     const option = (id, label) => `<option value="${esc(id)}"${id === manual.tts ? ' selected' : ''}>${esc(label)}</option>`;
     const { pitchOpts, speedOpts } = voiceTuneOptions(manual);
-    const volumeOpts = TTS_CHARACTER_VOLUMES.map(([v, label]) => `<option value="${v}"${v === manual.ttsVolume ? ' selected' : ''}>${esc(label)}</option>`).join('');
+    const volume = ttsVolumePercentText(manual.ttsVolume);
     // 接口来源不支持调音高，只给语速。
     const pitchSelect = tts.provider === 'system' ? `<select class="igs-asset-move" data-char-voice-pitch="${esc(charName)}" aria-label="朗读音高" title="音高（半音）">${pitchOpts}</select>` : '';
     return `<div class="igs-char-info-row igs-char-voice-row"><span class="igs-char-info-label">朗读</span>`
         + `<select class="igs-asset-move" data-char-voice-tts="${esc(charName)}" aria-label="朗读声音">${option('', '不朗读')}${items.map(([id, label]) => option(id, label)).join('')}</select>`
         + pitchSelect
         + `<select class="igs-asset-move" data-char-voice-speed="${esc(charName)}" aria-label="朗读语速" title="语速">${speedOpts}</select>`
-        + `<select class="igs-asset-move" data-char-voice-ttsVolume="${esc(charName)}" aria-label="朗读音量" title="这个角色的朗读音量">${volumeOpts}</select>`
+        + `<input class="igs-asset-move" type="number" min="0" step="any" data-char-voice-ttsVolume="${esc(charName)}" value="${esc(volume)}" placeholder="100" aria-label="朗读音量" title="100 为原声，可以大于 100；0 为不朗读">`
         + `<button type="button" class="igs-settings-action igs-settings-inline-action" data-action="tts-preview:${encSeg(charName)}">试听</button></div>`;
 }
 
@@ -53363,8 +53378,7 @@ const TTS_BILINGUAL_MODES = Object.freeze([
     ['translation', '读译文'],
     ['original', '读原文'],
 ]);
-// 角色单独音量：0 为这个角色不朗读。
-const TTS_CHARACTER_VOLUMES = Object.freeze([[1, '100%'], [0.75, '75%'], [0.5, '50%'], [0.25, '25%'], [0, '不朗读']]);
+// 角色单独音量存在 ttsVolume（倍数）：0 为这个角色不朗读，1 为原声。设置页按百分数填写，不设上限。
 const ROLE_KEYS = ['female', 'male', 'narrator'];
 const TTS_DEFAULTS = Object.freeze({ enabled: false, provider: 'system', volume: 0.9, rate: 1, narration: true, nsfw: false });
 // 朗读时 BGM 与环境音让得比语气音多一点，台词要听清。
@@ -53684,7 +53698,7 @@ function decideTts(state, line, settings, { sceneAssets, voices = [] } = {}) {
         voice: voice.voice,
         role: voice.role,
         lang,
-        volume: clamp(config.volume * gain * voice.volume, 0, 1),
+        volume: Math.max(0, config.volume * gain * voice.volume),
         rate: clamp(config.rate * voice.rate * (prosody.rate || 1), 0.5, 2),
         pitch: clamp(voice.pitch * (prosody.pitch || 1), 0.5, 2),
         pan: shape.pan, close: shape.close, phone: shape.phone,
@@ -54175,7 +54189,6 @@ __igsDefine(exports, "TTS_TRANSPORTS", () => TTS_TRANSPORTS);
 __igsDefine(exports, "TTS_API_FORMATS", () => TTS_API_FORMATS);
 __igsDefine(exports, "TTS_RATES", () => TTS_RATES);
 __igsDefine(exports, "TTS_BILINGUAL_MODES", () => TTS_BILINGUAL_MODES);
-__igsDefine(exports, "TTS_CHARACTER_VOLUMES", () => TTS_CHARACTER_VOLUMES);
 });
 __igsRegister("src/visual/igs-ui/sprite-height.js", function(module, exports, require) {
 // 立绘默认高度：没被「调整立绘」单独调过的立绘，先看角色自定义高度，再看性别默认高度（开关打开时按 DNA 判断，
@@ -63349,7 +63362,7 @@ const { resolveCharacterDna } = require("src/scene/character-dna.js");
 const { resolveCharacterKey } = require("src/scene/scene-directives.js");
 const { normalizeCharacterDna, normalizeCharacterDnaMap, removeCharacterDna, renameCharacterDna } = require("src/scene/character-dna.js");
 const { normalizeCharacterHouses } = require("src/visual/igs-ui/magic-house.js");
-const { normalizeCharacterVoice, normalizeCharacterVoices, normalizeVoiceBarkSettings, previewVoicePack, resolveCharacterVoice } = require("src/visual/igs-ui/voice-bark.js");
+const { normalizeCharacterVoice, normalizeCharacterVoices, normalizeVoiceBarkSettings, percentToTtsVolume, previewVoicePack, resolveCharacterVoice } = require("src/visual/igs-ui/voice-bark.js");
 const { clearTtsCache, listSystemVoices, previewTts, resolveTtsVoice } = require("src/visual/igs-ui/tts.js");
 const { normalizeCharacterSpriteScales } = require("src/visual/igs-ui/sprite-height.js");
 const { handleOutfitAction } = require("src/visual/igs-ui/settings-outfit-actions.js");
@@ -65714,7 +65727,7 @@ async function handleSettingsAction(action, ctx) {
             if (!['pack', 'pitch', 'speed', 'tts', 'ttsVolume'].includes(field)) return { ok: false, error: '未知的声线设置' };
             const voices = assets.characterVoices = normalizeCharacterVoices(assets.characterVoices);
             const entry = normalizeCharacterVoice(voices[charName]);
-            entry[field] = field === 'pack' || field === 'tts' ? value : Number(value);
+            entry[field] = field === 'pack' || field === 'tts' ? value : field === 'ttsVolume' ? percentToTtsVolume(value) : Number(value);
             const next = normalizeCharacterVoices({ [charName]: entry })[charName];
             if (next) voices[charName] = next;
             else delete voices[charName];

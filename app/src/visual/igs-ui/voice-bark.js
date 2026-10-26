@@ -79,10 +79,19 @@ export function normalizeCharacterVoice(value) {
     };
 }
 
-// 朗读音量（倍）：0～1，0 表示这个角色不朗读；缺省 1。
+// 设置页按百分数填写，100 为原声。空着或不是数字时按 100。不设上限。
+export function percentToTtsVolume(value) {
+    const text = String(value ?? '').trim();
+    if (!text) return 1;
+    const percent = Number(text);
+    if (!Number.isFinite(percent)) return 1;
+    return Math.max(0, Math.round(percent * 1000) / 100000);
+}
+
+// 朗读音量（倍）：0 表示这个角色不朗读，缺省 1，不设上限。
 function normalizeTtsVolume(value) {
     const volume = Number(value);
-    return value === undefined || value === null || value === '' || !Number.isFinite(volume) ? 1 : Math.max(0, Math.min(1, volume));
+    return value === undefined || value === null || value === '' || !Number.isFinite(volume) ? 1 : Math.max(0, volume);
 }
 
 export function normalizeVoiceSpeed(value) {
@@ -379,7 +388,7 @@ export function buildBarkChain(context, out, { volume, pan, phone }, nodes) {
     const gain = context.createGain();
     const filter = getVoiceFilter();
     const earPan = (voiceFilterParams(filter) || {}).pan || 0;
-    gain.gain.value = Math.max(0, Math.min(GAIN_CAP, (Number(volume) || 0) * voiceFilterGain(filter)));
+    gain.gain.value = Math.max(0, (Number(volume) || 0) * voiceFilterGain(filter));
     nodes.push(gain);
     let tail = gain;
     const link = (node) => {

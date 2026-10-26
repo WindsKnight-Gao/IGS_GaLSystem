@@ -29,8 +29,7 @@ export const TTS_BILINGUAL_MODES = Object.freeze([
     ['translation', '读译文'],
     ['original', '读原文'],
 ]);
-// 角色单独音量：0 为这个角色不朗读。
-export const TTS_CHARACTER_VOLUMES = Object.freeze([[1, '100%'], [0.75, '75%'], [0.5, '50%'], [0.25, '25%'], [0, '不朗读']]);
+// 角色单独音量存在 ttsVolume（倍数）：0 为这个角色不朗读，1 为原声。设置页按百分数填写，不设上限。
 const ROLE_KEYS = ['female', 'male', 'narrator'];
 const TTS_DEFAULTS = Object.freeze({ enabled: false, provider: 'system', volume: 0.9, rate: 1, narration: true, nsfw: false });
 // 朗读时 BGM 与环境音让得比语气音多一点，台词要听清。
@@ -356,7 +355,7 @@ export function decideTts(state, line, settings, { sceneAssets, voices = [] } = 
         voice: voice.voice,
         role: voice.role,
         lang,
-        volume: clamp(config.volume * gain * voice.volume, 0, 1),
+        volume: Math.max(0, config.volume * gain * voice.volume),
         rate: clamp(config.rate * voice.rate * (prosody.rate || 1), 0.5, 2),
         pitch: clamp(voice.pitch * (prosody.pitch || 1), 0.5, 2),
         pan: shape.pan, close: shape.close, phone: shape.phone,

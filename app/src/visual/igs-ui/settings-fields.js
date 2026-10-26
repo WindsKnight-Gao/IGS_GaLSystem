@@ -9,7 +9,7 @@ import { SLOT_ICONS, menuItem, transferIcons, renderCharacterSlotTabs, renderRev
 import { MAGIC_HOUSES, normalizeMagicHouse } from './dialog-theme-css-skins.js';
 import { resolveCharacterMagicHouse } from './magic-house.js';
 import { VOICE_PITCH_LIMIT, VOICE_SPEED_RANGE, normalizeCharacterVoice, resolveCharacterVoice, voicePackOptions } from './voice-bark.js';
-import { TTS_CHARACTER_VOLUMES, listSystemVoices, systemVoiceOptions, ttsApiVoiceOptions } from './tts.js';
+import { listSystemVoices, systemVoiceOptions, ttsApiVoiceOptions } from './tts.js';
 import { resolveSpriteBaseScale } from './sprite-height.js';
 import { hasCharacterSpriteLayout } from './sprite-key-migration.js';
 
@@ -581,6 +581,11 @@ function voiceTuneOptions(manual) {
     return { pitchOpts, speedOpts };
 }
 
+function ttsVolumePercentText(volume) {
+    const percent = Math.round(Number(volume) * 1000) / 10;
+    return Number.isFinite(percent) ? String(percent) : '100';
+}
+
 // 台词朗读开着时：这个角色的朗读声音。留空就是不朗读，避免路人被默认声音念出来。
 function renderCharacterTtsRow(charName, { sceneAssets, tts }) {
     const voices = sceneAssets && typeof sceneAssets.characterVoices === 'object' ? sceneAssets.characterVoices || {} : {};
@@ -590,14 +595,14 @@ function renderCharacterTtsRow(charName, { sceneAssets, tts }) {
     if (manual.tts && !items.some(([id]) => id === manual.tts)) items.push([manual.tts, `${manual.tts}（不可用）`]);
     const option = (id, label) => `<option value="${esc(id)}"${id === manual.tts ? ' selected' : ''}>${esc(label)}</option>`;
     const { pitchOpts, speedOpts } = voiceTuneOptions(manual);
-    const volumeOpts = TTS_CHARACTER_VOLUMES.map(([v, label]) => `<option value="${v}"${v === manual.ttsVolume ? ' selected' : ''}>${esc(label)}</option>`).join('');
+    const volume = ttsVolumePercentText(manual.ttsVolume);
     // 接口来源不支持调音高，只给语速。
     const pitchSelect = tts.provider === 'system' ? `<select class="igs-asset-move" data-char-voice-pitch="${esc(charName)}" aria-label="朗读音高" title="音高（半音）">${pitchOpts}</select>` : '';
     return `<div class="igs-char-info-row igs-char-voice-row"><span class="igs-char-info-label">朗读</span>`
         + `<select class="igs-asset-move" data-char-voice-tts="${esc(charName)}" aria-label="朗读声音">${option('', '不朗读')}${items.map(([id, label]) => option(id, label)).join('')}</select>`
         + pitchSelect
         + `<select class="igs-asset-move" data-char-voice-speed="${esc(charName)}" aria-label="朗读语速" title="语速">${speedOpts}</select>`
-        + `<select class="igs-asset-move" data-char-voice-ttsVolume="${esc(charName)}" aria-label="朗读音量" title="这个角色的朗读音量">${volumeOpts}</select>`
+        + `<input class="igs-asset-move" type="number" min="0" step="any" data-char-voice-ttsVolume="${esc(charName)}" value="${esc(volume)}" placeholder="100" aria-label="朗读音量" title="100 为原声，可以大于 100；0 为不朗读">`
         + `<button type="button" class="igs-settings-action igs-settings-inline-action" data-action="tts-preview:${encSeg(charName)}">试听</button></div>`;
 }
 

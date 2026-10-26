@@ -52,7 +52,7 @@ import { resolveCharacterDna } from '../../scene/character-dna.js';
 import { resolveCharacterKey } from '../../scene/scene-directives.js';
 import { normalizeCharacterDna, normalizeCharacterDnaMap, removeCharacterDna, renameCharacterDna } from '../../scene/character-dna.js';
 import { normalizeCharacterHouses } from './magic-house.js';
-import { normalizeCharacterVoice, normalizeCharacterVoices, normalizeVoiceBarkSettings, previewVoicePack, resolveCharacterVoice } from './voice-bark.js';
+import { normalizeCharacterVoice, normalizeCharacterVoices, normalizeVoiceBarkSettings, percentToTtsVolume, previewVoicePack, resolveCharacterVoice } from './voice-bark.js';
 import { clearTtsCache, listSystemVoices, previewTts, resolveTtsVoice } from './tts.js';
 import { normalizeCharacterSpriteScales } from './sprite-height.js';
 import { handleOutfitAction } from './settings-outfit-actions.js';
@@ -2422,7 +2422,7 @@ export async function handleSettingsAction(action, ctx) {
             if (!['pack', 'pitch', 'speed', 'tts', 'ttsVolume'].includes(field)) return { ok: false, error: '未知的声线设置' };
             const voices = assets.characterVoices = normalizeCharacterVoices(assets.characterVoices);
             const entry = normalizeCharacterVoice(voices[charName]);
-            entry[field] = field === 'pack' || field === 'tts' ? value : Number(value);
+            entry[field] = field === 'pack' || field === 'tts' ? value : field === 'ttsVolume' ? percentToTtsVolume(value) : Number(value);
             const next = normalizeCharacterVoices({ [charName]: entry })[charName];
             if (next) voices[charName] = next;
             else delete voices[charName];

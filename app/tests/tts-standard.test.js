@@ -93,10 +93,13 @@ test('gate: a character can be muted or turned down for tts only', () => {
     const full = decideTts({}, line, ON, { sceneAssets: assets({ 艾莉: { tts: voice } }) });
     const half = decideTts({}, line, ON, { sceneAssets: assets({ 艾莉: { tts: voice, ttsVolume: 0.5 } }) });
     assert.ok(Math.abs(half.volume - full.volume / 2) < 1e-9);
-    // 存储：默认值不写，改过的才写；语气音的老数据原样不变。
-    assert.deepEqual(normalizeCharacterVoices({ A: { ttsVolume: 0 }, B: { ttsVolume: 1 }, C: { pack: 'off' } }), {
+    const loud = decideTts({}, line, ON, { sceneAssets: assets({ 艾莉: { tts: voice, ttsVolume: 2.5 } }) });
+    assert.ok(Math.abs(loud.volume - full.volume * 2.5) < 1e-9);
+    // 存储：默认值不写，改过的才写；语气音的老数据原样不变。大于原声的音量保留。
+    assert.deepEqual(normalizeCharacterVoices({ A: { ttsVolume: 0 }, B: { ttsVolume: 1 }, C: { pack: 'off' }, D: { ttsVolume: 2.5 } }), {
         A: { pack: '', pitch: 0, speed: 1, ttsVolume: 0 },
         C: { pack: 'off', pitch: 0, speed: 1 },
+        D: { pack: '', pitch: 0, speed: 1, ttsVolume: 2.5 },
     });
 });
 
@@ -180,6 +183,8 @@ test('gate: tts settings show sustain, pronunciation table, bilingual choice and
         await controller.invoke(`scene-toggle-dna:${encodeURIComponent('艾莉')}`);
         await controller.invoke(`char-voice:ttsVolume:${encodeURIComponent('艾莉')}:0`);
         assert.deepEqual(controller.getSnapshot().draft.bridge.sceneAssets.characterVoices, { 艾莉: { pack: '', pitch: 0, speed: 1, ttsVolume: 0 } });
+        await controller.invoke(`char-voice:ttsVolume:${encodeURIComponent('艾莉')}:250`);
+        assert.equal(controller.getSnapshot().draft.bridge.sceneAssets.characterVoices['艾莉'].ttsVolume, 2.5);
         controller.close();
     } finally {
         vn.destroy();
